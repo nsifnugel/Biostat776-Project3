@@ -1,0 +1,273 @@
+---
+title: "Project 3"
+author: "Natalia Sifnugel"
+date: "2023-10-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(lubridate) # part of tidyverse
+library(stringr) # part of tidyverse
+library(scales)
+library(tidytext)
+library(wordcloud)
+library(sessioninfo)
+```
+
+```{r}
+
+rds_files <- c("b_lyrics.RDS", "ts_lyrics.RDS", "sales.RDS")
+## Check whether we have all 3 files
+
+if (any(!file.exists(here("~/Desktop/biostat776/data", rds_files)))) {
+  ## If we don't, then download the data
+  b_lyrics <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-09-29/beyonce_lyrics.csv")
+  ts_lyrics <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-09-29/taylor_swift_lyrics.csv")
+  sales <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-09-29/sales.csv")
+
+  ## Then save the data objects to RDS files
+  saveRDS(b_lyrics, file = here("~/Desktop/biostat776/data", "b_lyrics.RDS"))
+  saveRDS(ts_lyrics, file = here("~/Desktop/biostat776/data", "ts_lyrics.RDS"))
+  saveRDS(sales, file = here("~/Desktop/biostat776/data", "sales.RDS"))
+} else {
+  b_lyrics <- read_rds(here("~/Desktop/biostat776/data","b_lyrics.RDS"))
+  ts_lyrics <- read_rds(here("~/Desktop/biostat776/data","ts_lyrics.RDS"))
+  sales <-read_rds(here("~/Desktop/biostat776/data","sales.RDS"))
+}
+
+```
+
+# Part 1: Explore album sales
+
+## Part 1a
+
+```{r}
+sales_wrangled <- sales %>%
+  mutate(released = mdy(str_remove(released,'\\(..\\)\\[\\d+\\]')), 
+         country = fct_recode(country,"World" = "WW"),
+         sales_millions = sales/1000000) %>% 
+  filter(country %in% c("US", "UK", "World")) %>%
+  print(n=Inf)
+```
+
+## Part 1b  
+
+```{r}
+sales_wrangled %>%
+  filter(country == "US") %>%
+  mutate(years_since_release =
+         floor(as.duration(today() - released)/dyears(1))) %>%
+  group_by(artist) %>%
+  summarize(
+    most_recent_album = min(years_since_release),
+    oldest_album = max(years_since_release),
+    median_years_since_album_release = median(years_since_release)
+  )
+```
+
+## Part 1c
+
+```{r}
+sales_wrangled %>%
+  group_by(artist, country) %>%
+  summarize(total_sales_dollars = sum(sales)) %>%
+  ggplot(aes(x = artist, y = total_sales_dollars, fill = country)) +
+  geom_bar(position="fill", stat="identity") +
+  labs(
+    title = "Percent of Total Sales from US, UK, and Worldwide by Artist",
+    subtitle = "US makes up a larger portion of total sales for Taylor Swift.\nUK makes up a larger portion of total sales for Beyonce.",
+    x = "Artist",
+    y = "Percent of Total Sales",
+  ) +
+  scale_y_continuous(labels = percent) +
+  scale_fill_discrete(name = "Country")
+```
+
+## Part 1d
+
+```{r}
+sales_wrangled %>%
+  filter(country == "World") %>%
+  mutate(title = fct_reorder(title, sales)) %>%
+  ggplot(aes(x = title, y = sales, fill = artist))+
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Album vs. Worldwide Sales",
+    subtitle = "Taylor Swift's Fearless earned the most worldwide, but Beyonce holds 3 of the top 5 earning album spots",
+    x = "Album Title",
+    y = "Total Sales ($)"
+  ) +
+  scale_y_continuous(labels = dollar) +
+  scale_fill_discrete(name = "Artist")
+```
+
+## Part 1e
+
+```{r}
+sales_wrangled %>%
+  ggplot(aes(x = released, y = sales, color = artist)) +
+  geom_point() +
+  facet_wrap(~ country, ncol = 1)+
+  labs(
+    title = "Sales vs. Year by Country",
+    subtitle = "Album sales for both artists decreasing over time, could this be related to streaming?",
+    x = "Year",
+    y = "Total Sales ($)"
+  ) +
+  scale_y_continuous(labels = dollar)
+```
+
+# Part 2: Exploring sentiment of lyrics
+
+## Part 2a
+
+```{r}
+ts_lines <- ts_lyrics %>%
+  unnest_tokens(
+    output = line,
+    input = Lyrics,
+    token = "lines"
+  )
+
+word_search <- function(x,y) {
+  lines <- grep(y,tolower(x$line))
+  n <- length(lines)
+  result1 <- paste("Rows containing",y,":", paste(lines, collapse = ", "))
+  result2 <- paste("Total Rows:",n)
+  message(result1,"\n", result2)
+  return(invisible(lines)) #returns vector with lines
+}
+
+ts_lines[word_search(ts_lines,"hello"), ]
+
+ts_lines[word_search(ts_lines,"goodbye"), ]
+
+
+```
+
+## Part 2b
+
+```{r}
+
+
+b_lyrics[word_search(b_lyrics,"hello"), ]
+
+b_lyrics[word_search(b_lyrics,"goodbye"), ]
+
+```
+
+## Part 2c
+
+```{r}
+b_top25words <- b_lyrics %>%
+  unnest_tokens(
+    output = word,
+    input = line,
+    token = "words"
+  ) %>%
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE) %>%
+  inner_join(get_sentiments("bing")) %>%
+  top_n(n, n = 25) %>%
+  print(n = Inf)
+
+b_top25words %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  ggplot(aes(y = n, x = word, fill = sentiment)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "25 Most Used Words in Beyonce Songs",
+    subtitle = "Love is Beyonce's most frequently used word, suggesting her music is more positive\nthan negative.",
+    y = "Number of Times Used",
+    x = "Word"
+  )
+
+b_top25words %>% with(wordcloud(word,n))
+
+```
+
+## Part 2d
+
+```{r}
+
+ts_words <- ts_lines %>%
+  unnest_tokens(
+    output = word,
+    input = line,
+    token = "words"
+  ) %>%
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE) %>%
+  inner_join(get_sentiments("bing")) %>%
+  top_n(n, n = 25) %>%
+  print(n = Inf)
+
+ts_words %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  ggplot(aes(y = n, x = word, fill = sentiment)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "25 Most Used Words in Taylor Swift Songs",
+    subtitle = "Love is also Taylor Swift's most frequently used word, but she has more negative than\npositive bars, suggesting her music is more negative.",
+    y = "Number of Times Used",
+    x = "Word"
+  )
+
+ts_words %>% with(wordcloud(word,n))
+
+```
+
+## Part 2e
+
+```{r}
+ts_lyrics %>%
+  unnest_tokens(
+    output = word,
+    input = Lyrics,
+    token = "words"
+  ) %>%
+  anti_join(stop_words) %>%
+  group_by(Album) %>%
+  count(word) %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(Album) %>%
+  summarize(
+    mean_sentiment_score = mean(value)
+  ) %>%
+  print(n = Inf) %>%
+  rename(title = Album) %>%
+  inner_join(sales_wrangled, by = "title") %>%
+  ggplot(aes(x = released, y = mean_sentiment_score, size = sales_millions)) + # ask for better way to show legend for sales
+  geom_point(aes(color = title)) +
+  geom_hline(
+    yintercept = 0) +
+  scale_y_continuous(limits = c(-1,1)) +
+  labs(
+    title = "Sentiment of Taylor Swift Albums vs. Year of Album Release",
+    subtitle = "The overall sentiment of Taylor's music has gone down over the years.",
+    x = "Year of Album Release",
+    y = "Average Sentiment Score"
+  ) +
+  scale_size_continuous(name = "Sales in Millions of Dollars") +
+  scale_color_discrete(name = "Album")
+```
+
+### Discussion
+
+The average sentiment score of Taylor's albums has gone down over the years, suggesting her music is becoming more negative. Early in her career, her music had a balance of negative and positive sentiments, as the mean scores were close to 0. Overtime, the mean scores have gone below zero, indicating that the overall sentiments of her albums are negative. 
+
+# R Session Information 
+
+```{r}
+options(width = 120)
+sessioninfo::session_info()
+```
